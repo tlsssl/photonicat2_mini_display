@@ -898,7 +898,13 @@ func mainLoop() {
 						} else {
 							nextPageLength = cfgNumPages
 						}
-						drawFooter(display, footerFramebuffers[middleFrames%2], nextPageIdx, nextPageLength, isNextPageSMS)
+						var displayPageIdx int
+						if isNextPageSMS {
+							displayPageIdx = nextLocalIdx
+						} else {
+							displayPageIdx = nextPageIdx
+						}
+						drawFooter(display, footerFramebuffers[middleFrames%2], displayPageIdx, nextPageLength, isNextPageSMS)
 					}
 
 					// Try to use pre-calculated frame, fallback to real-time calculation
