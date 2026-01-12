@@ -27,7 +27,7 @@ type MetricSource interface {
 type SourceStatus struct {
 	Name        string            `json:"name"`
 	Type        string            `json:"type"`
-	Enabled     bool              `json:"enabled"`
+	Enabled     int               `json:"enabled"`
 	Running     bool              `json:"running"`
 	LastUpdate  time.Time         `json:"last_update"`
 	LastError   string            `json:"last_error,omitempty"`
@@ -52,16 +52,16 @@ type CustomMetricsConfig struct {
 
 // GlobalMetricSettings contains global configuration for all metric sources
 type GlobalMetricSettings struct {
-	EnableLogging      bool `json:"enable_logging"`
-	ErrorRetryInterval int  `json:"error_retry_interval"` // seconds
-	MaxRetries         int  `json:"max_retries"`
+	EnableLogging      int `json:"enable_logging"` // 0 or 1
+	ErrorRetryInterval int `json:"error_retry_interval"` // seconds
+	MaxRetries         int `json:"max_retries"`
 }
 
 // SourceConfig is the configuration for a single metric source
 type SourceConfig struct {
 	Type    string                 `json:"type"`    // "http_endpoint", "command", "env", "json_file"
 	Name    string                 `json:"name"`
-	Enabled bool                   `json:"enabled"`
+	Enabled int                    `json:"enabled"` // 0 or 1
 	Config  map[string]interface{} `json:"config"`
 }
 
@@ -85,7 +85,7 @@ func NewCustomMetricManager(config CustomMetricsConfig) (*CustomMetricManager, e
 
 	// Create sources based on configuration
 	for _, sourceConfig := range config.Sources {
-		if !sourceConfig.Enabled {
+		if sourceConfig.Enabled == 0 {
 			log.Printf("CustomMetrics: Source '%s' is disabled, skipping", sourceConfig.Name)
 			continue
 		}
@@ -198,7 +198,7 @@ func (m *CustomMetricManager) GetSourceByName(name string) MetricSource {
 // HTTPSource accepts custom metric data via HTTP POST
 type HTTPSource struct {
 	name           string
-	enabled        bool
+	enabled        int
 	allowedKeys    []string
 	globalSettings GlobalMetricSettings
 	mu             sync.RWMutex
@@ -242,7 +242,7 @@ func (s *HTTPSource) Start() error {
 	s.status.Running = true
 	s.status.Stats.StartTime = time.Now()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: HTTPSource '%s' started (passive mode)", s.name)
 	}
 
@@ -255,7 +255,7 @@ func (s *HTTPSource) Stop() error {
 
 	s.status.Running = false
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: HTTPSource '%s' stopped", s.name)
 	}
 
@@ -306,7 +306,7 @@ func (s *HTTPSource) UpdateData(data map[string]interface{}) error {
 	s.status.LastUpdate = time.Now()
 	s.status.Stats.SuccessCount++
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: HTTPSource '%s' updated %d keys", s.name, len(data))
 	}
 
@@ -325,7 +325,7 @@ type CommandSource struct {
 	timeout        int
 	parser         string
 	dataKey        string
-	enabled        bool
+	enabled        int
 	globalSettings GlobalMetricSettings
 	stopChan       chan struct{}
 	mu             sync.RWMutex
@@ -400,7 +400,7 @@ func (s *CommandSource) Start() error {
 
 	go s.run()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: CommandSource '%s' started (interval: %ds)", s.name, s.interval)
 	}
 
@@ -418,7 +418,7 @@ func (s *CommandSource) Stop() error {
 	close(s.stopChan)
 	s.status.Running = false
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: CommandSource '%s' stopped", s.name)
 	}
 
@@ -446,7 +446,7 @@ func (s *CommandSource) executeCommand() {
 	startTime := time.Now()
 
 	// Log execution start
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: CommandSource '%s' executing: %s", s.name, s.command)
 	}
 
@@ -479,7 +479,7 @@ func (s *CommandSource) executeCommand() {
 		}
 		s.mu.Unlock()
 
-		if s.globalSettings.EnableLogging {
+		if s.globalSettings.EnableLogging != 0 {
 			log.Printf("CustomMetrics: CommandSource '%s' failed: %s", s.name, s.status.LastError)
 		}
 		return
@@ -495,7 +495,7 @@ func (s *CommandSource) executeCommand() {
 
 		globalData.Store(s.dataKey, "PARSE_ERROR")
 
-		if s.globalSettings.EnableLogging {
+		if s.globalSettings.EnableLogging != 0 {
 			log.Printf("CustomMetrics: CommandSource '%s' parse error: %v", s.name, err)
 		}
 		return
@@ -510,7 +510,7 @@ func (s *CommandSource) executeCommand() {
 	s.status.LastError = ""
 	s.mu.Unlock()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: CommandSource '%s' result: %s = %s (took %dms)",
 			s.name, s.dataKey, result, duration)
 	}
@@ -544,7 +544,7 @@ type EnvVarSource struct {
 	name            string
 	variables       []EnvVarMapping
 	refreshInterval int
-	enabled         bool
+	enabled         int
 	globalSettings  GlobalMetricSettings
 	stopChan        chan struct{}
 	mu              sync.RWMutex
@@ -618,7 +618,7 @@ func (s *EnvVarSource) Start() error {
 		go s.run()
 	}
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: EnvVarSource '%s' started (%d variables, refresh: %ds)",
 			s.name, len(s.variables), s.refreshInterval)
 	}
@@ -639,7 +639,7 @@ func (s *EnvVarSource) Stop() error {
 	}
 	s.status.Running = false
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: EnvVarSource '%s' stopped", s.name)
 	}
 
@@ -680,7 +680,7 @@ func (s *EnvVarSource) readEnvironmentVariables() {
 	s.status.Stats.LastDuration = duration
 	s.mu.Unlock()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: EnvVarSource '%s' read %d variables", s.name, len(s.variables))
 	}
 }
@@ -709,7 +709,7 @@ type JSONFileSource struct {
 	filePath       string
 	interval       int
 	mappings       []JSONMapping
-	enabled        bool
+	enabled        int
 	globalSettings GlobalMetricSettings
 	stopChan       chan struct{}
 	mu             sync.RWMutex
@@ -785,7 +785,7 @@ func (s *JSONFileSource) Start() error {
 
 	go s.run()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: JSONFileSource '%s' started (file: %s, interval: %ds)",
 			s.name, s.filePath, s.interval)
 	}
@@ -804,7 +804,7 @@ func (s *JSONFileSource) Stop() error {
 	close(s.stopChan)
 	s.status.Running = false
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: JSONFileSource '%s' stopped", s.name)
 	}
 
@@ -843,7 +843,7 @@ func (s *JSONFileSource) readJSONFile() {
 			globalData.Store(mapping.DataKey, "FILE_ERROR")
 		}
 
-		if s.globalSettings.EnableLogging {
+		if s.globalSettings.EnableLogging != 0 {
 			log.Printf("CustomMetrics: JSONFileSource '%s' read error: %v", s.name, err)
 		}
 		return
@@ -861,7 +861,7 @@ func (s *JSONFileSource) readJSONFile() {
 			globalData.Store(mapping.DataKey, "PARSE_ERROR")
 		}
 
-		if s.globalSettings.EnableLogging {
+		if s.globalSettings.EnableLogging != 0 {
 			log.Printf("CustomMetrics: JSONFileSource '%s' parse error: %v", s.name, err)
 		}
 		return
@@ -873,7 +873,7 @@ func (s *JSONFileSource) readJSONFile() {
 		value, err := extractJSONPath(string(data), mapping.JSONPath)
 		if err != nil {
 			globalData.Store(mapping.DataKey, "EXTRACT_ERROR")
-			if s.globalSettings.EnableLogging {
+			if s.globalSettings.EnableLogging != 0 {
 				log.Printf("CustomMetrics: JSONFileSource '%s' extract error for %s: %v",
 					s.name, mapping.JSONPath, err)
 			}
@@ -892,7 +892,7 @@ func (s *JSONFileSource) readJSONFile() {
 	s.status.LastError = ""
 	s.mu.Unlock()
 
-	if s.globalSettings.EnableLogging {
+	if s.globalSettings.EnableLogging != 0 {
 		log.Printf("CustomMetrics: JSONFileSource '%s' updated %d/%d mappings (took %dms)",
 			s.name, successCount, len(s.mappings), duration)
 	}
