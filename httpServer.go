@@ -751,6 +751,11 @@ func httpServer(port string) {
 	app.Post("/api/v1/go_set_max_backlight", setMaxBacklight)
 	app.Post("/api/v1/go_reset_max_backlight", resetMaxBacklight)
 
+	// Custom metrics endpoints
+	app.Get("/api/v1/custom_metrics/status", getCustomMetricsStatus)
+	app.Post("/api/v1/custom_metrics/data", updateCustomMetricsData)
+	app.Post("/api/v1/custom_metrics/:source/execute", executeCustomMetricsSource)
+
 	// Start server, retry if failed
 	var ln net.Listener
 	var err error
@@ -766,4 +771,100 @@ func httpServer(port string) {
 
 	log.Println("Successfully bound to", port)
 	log.Fatal(app.Listener(ln))
+}
+
+// ============================================================================
+// Custom Metrics Handlers
+// ============================================================================
+
+// getCustomMetricsStatus returns the status of all custom metric sources
+func getCustomMetricsStatus(c *fiber.Ctx) error {
+	if customMetricsMgr == nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": "custom metrics manager not initialized",
+		})
+	}
+
+	statuses := customMetricsMgr.GetAllStatus()
+	return c.JSON(fiber.Map{
+		"sources": statuses,
+		"count":   len(statuses),
+	})
+}
+
+// updateCustomMetricsData updates custom metrics data (for HTTP sources)
+func updateCustomMetricsData(c *fiber.Ctx) error {
+	if customMetricsMgr == nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": "custom metrics manager not initialized",
+		})
+	}
+
+	var data map[string]interface{}
+	if err := c.BodyParser(&data); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "invalid JSON",
+		})
+	}
+
+	// Find HTTP sources and update them
+	updated := false
+	for _, source := range customMetricsMgr.sources {
+		if httpSource, ok := source.(*HTTPSource); ok {
+			if err := httpSource.UpdateData(data); err != nil {
+				return c.Status(500).JSON(fiber.Map{
+					"error": err.Error(),
+				})
+			}
+			updated = true
+		}
+	}
+
+	if !updated {
+		// No HTTP source found, just store the data directly
+		for key, value := range data {
+			globalData.Store(key, fmt.Sprint(value))
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"updated": len(data),
+	})
+}
+
+// executeCustomMetricsSource triggers immediate execution of a command source
+func executeCustomMetricsSource(c *fiber.Ctx) error {
+	if customMetricsMgr == nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": "custom metrics manager not initialized",
+		})
+	}
+
+	sourceName := c.Params("source")
+	if sourceName == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "source name is required",
+		})
+	}
+
+	source := customMetricsMgr.GetSourceByName(sourceName)
+	if source == nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": fmt.Sprintf("source '%s' not found", sourceName),
+		})
+	}
+
+	// Only command sources support immediate execution
+	if cmdSource, ok := source.(*CommandSource); ok {
+		cmdSource.ExecuteNow()
+		return c.JSON(fiber.Map{
+			"status": "triggered",
+			"source": sourceName,
+		})
+	}
+
+	return c.Status(400).JSON(fiber.Map{
+		"error": fmt.Sprintf("source '%s' does not support immediate execution", sourceName),
+	})
 }

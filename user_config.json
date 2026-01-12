@@ -1,0 +1,111 @@
+{
+  "display_template": {
+    "elements": {
+      "page0": [
+        {
+          "type": "fixed_text",
+          "label": "Disk Free",
+          "position": {
+            "x": 100,
+            "y": 235
+          },
+          "font": "tiny",
+          "color": [255, 229, 0],
+          "enable": 1
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": 100,
+            "y": 250
+          },
+          "font": "unit",
+          "color": [255, 229, 255],
+          "units": "MB",
+          "data_key": "DiskFreeMB",
+          "units_font": "tiny",
+          "enable": 1
+        }
+      ]
+    }
+  },
+  "custom_metrics": {
+    "sources": [
+      {
+        "type": "command",
+        "name": "DiskFree",
+        "enabled": false,
+        "config": {
+          "command": "./get_disk_free_mb.sh",
+          "interval": 10,
+          "timeout": 2,
+          "parser": "stdout",
+          "data_key": "DiskFreeMB"
+        }
+      },
+      {
+        "type": "command",
+        "name": "DiskFreeAlternative",
+        "enabled": true,
+        "config": {
+          "command": "df / | awk 'NR==2 {print int($4/1024)}'",
+          "interval": 10,
+          "timeout": 2,
+          "parser": "stdout",
+          "data_key": "DiskFreeMB"
+        }
+      },
+      {
+        "type": "http",
+        "name": "RemoteDiskMetrics",
+        "enabled": false,
+        "config": {
+          "url": "http://your-server:8080/metrics/disk",
+          "method": "GET",
+          "interval": 30,
+          "timeout": 5,
+          "parser": "json",
+          "data_mappings": [
+            {
+              "source_path": "disk.free_mb",
+              "data_key": "RemoteDiskFreeMB"
+            }
+          ]
+        }
+      },
+      {
+        "type": "env",
+        "name": "EnvironmentMetrics",
+        "enabled": false,
+        "config": {
+          "variables": [
+            {
+              "env_name": "CUSTOM_DISK_FREE",
+              "data_key": "EnvDiskFreeMB"
+            }
+          ]
+        }
+      },
+      {
+        "type": "json_file",
+        "name": "JSONFileMetrics",
+        "enabled": false,
+        "config": {
+          "file_path": "/tmp/metrics.json",
+          "watch_interval": 5,
+          "data_mappings": [
+            {
+              "source_path": "disk.free_mb",
+              "data_key": "JSONDiskFreeMB"
+            }
+          ]
+        }
+      }
+    ],
+    "global_settings": {
+      "enable_logging": true,
+      "error_retry_interval": 30,
+      "max_retries": 3
+    }
+  }
+}

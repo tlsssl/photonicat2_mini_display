@@ -94,10 +94,11 @@ var (
 	dftCfg          Config
 	userCfg         Config
 	currPageIdx     int
-	fonts           map[string]FontConfig
-	assetsPrefix    = "."
-	globalData      sync.Map
-	autoRotatePages = false
+	fonts              map[string]FontConfig
+	assetsPrefix       = "."
+	globalData         sync.Map
+	autoRotatePages    = false
+	customMetricsMgr   *CustomMetricManager
 
 	// Frame buffer pool is now managed by BufferManager
 
@@ -294,15 +295,16 @@ type DisplayTemplate struct {
 
 // Config represents the overall config JSON.
 type Config struct {
-	ScreenDimmerTimeOnBatterySeconds int             `json:"screen_dimmer_time_on_battery_seconds"`
-	ScreenDimmerTimeOnDCSeconds      int             `json:"screen_dimmer_time_on_dc_seconds"`
-	ScreenMaxBrightness              int             `json:"screen_max_brightness"`
-	ScreenMinBrightness              int             `json:"screen_min_brightness"`
-	PingSite0                        string          `json:"ping_site0"`
-	PingSite1                        string          `json:"ping_site1"`
-	DisplayTemplate                  DisplayTemplate `json:"display_template"`
-	ShowSms                          bool            `json:"show_sms"`
-	SmsLimitForScreen                int             `json:"sms_limit_for_screen"`
+	ScreenDimmerTimeOnBatterySeconds int                 `json:"screen_dimmer_time_on_battery_seconds"`
+	ScreenDimmerTimeOnDCSeconds      int                 `json:"screen_dimmer_time_on_dc_seconds"`
+	ScreenMaxBrightness              int                 `json:"screen_max_brightness"`
+	ScreenMinBrightness              int                 `json:"screen_min_brightness"`
+	PingSite0                        string              `json:"ping_site0"`
+	PingSite1                        string              `json:"ping_site1"`
+	DisplayTemplate                  DisplayTemplate     `json:"display_template"`
+	ShowSms                          bool                `json:"show_sms"`
+	SmsLimitForScreen                int                 `json:"sms_limit_for_screen"`
+	CustomMetrics                    CustomMetricsConfig `json:"custom_metrics,omitempty"`
 }
 
 // FontConfig holds parameters for a font.
@@ -696,6 +698,22 @@ func main() {
 
 	go collectFixedData()
 	go getSmsPages()
+
+	// Initialize and start custom metrics manager
+	if len(cfg.CustomMetrics.Sources) > 0 {
+		var err error
+		customMetricsMgr, err = NewCustomMetricManager(cfg.CustomMetrics)
+		if err != nil {
+			log.Printf("Failed to create custom metrics manager: %v", err)
+		} else {
+			if err := customMetricsMgr.Start(); err != nil {
+				log.Printf("Failed to start custom metrics manager: %v", err)
+			} else {
+				log.Printf("Custom metrics manager started with %d sources", len(cfg.CustomMetrics.Sources))
+			}
+		}
+	}
+
 	go httpServer(addr)                          //listen local for http request
 	go monitorKeyboard(&changePageTriggered)     // Start keyboard monitoring in a goroutine
 	go monitorConsoleInput(&changePageTriggered) // Start console input monitoring in a goroutine
@@ -739,6 +757,14 @@ func registerExitHandler() {
 		*/
 
 		time.Sleep(200 * time.Millisecond)
+
+		// Stop custom metrics manager
+		if customMetricsMgr != nil {
+			log.Printf("Stopping custom metrics manager...")
+			if err := customMetricsMgr.Stop(); err != nil {
+				log.Printf("Error stopping custom metrics manager: %v", err)
+			}
+		}
 
 		// Different behavior for SIGTERM vs SIGINT
 		if sig == syscall.SIGTERM {

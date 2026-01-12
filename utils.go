@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"log"
@@ -32,8 +33,9 @@ func loadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	err = secureUnmarshal(data, &cfg)
-	return cfg, err
+	var tempCfg Config
+	err = secureUnmarshal(data, &tempCfg)
+	return tempCfg, err
 }
 
 var (
@@ -551,57 +553,98 @@ func stateName(s int) string {
 	}
 }
 
-// mergeConfigs rebuilds `cfg` by overlaying userCfg on top of dftCfg.
+// deepMergeJSON performs a deep merge of two JSON objects.
+// For objects: recursively merge keys from src into dst
+// For arrays: append src arrays to dst arrays
+// For primitives: src overrides dst (unless src is zero value for numeric fields)
+func deepMergeJSON(dst, src map[string]interface{}) map[string]interface{} {
+	for key, srcVal := range src {
+		// Skip zero/empty values from src for certain fields to preserve dst defaults
+		if srcVal == nil {
+			continue
+		}
+
+		// Skip zero numeric values for brightness/dimmer fields - they should be explicit
+		if (key == "screen_max_brightness" || key == "screen_min_brightness" ||
+			key == "screen_dimmer_time_on_battery_seconds" || key == "screen_dimmer_time_on_dc_seconds") {
+			if numVal, ok := srcVal.(float64); ok && numVal == 0 {
+				continue // Don't override with zero value
+			}
+		}
+
+		if dstVal, exists := dst[key]; exists {
+			// Key exists in both - need to merge
+			srcMap, srcIsMap := srcVal.(map[string]interface{})
+			dstMap, dstIsMap := dstVal.(map[string]interface{})
+
+			if srcIsMap && dstIsMap {
+				// Both are objects - recursively merge
+				dst[key] = deepMergeJSON(dstMap, srcMap)
+			} else if srcSlice, srcIsSlice := srcVal.([]interface{}); srcIsSlice {
+				if dstSlice, dstIsSlice := dstVal.([]interface{}); dstIsSlice {
+					// Both are arrays - APPEND src to dst
+					dst[key] = append(dstSlice, srcSlice...)
+					log.Printf("JSON merge: Appended %d elements to array '%s' (total: %d)",
+						len(srcSlice), key, len(dstSlice)+len(srcSlice))
+				} else {
+					// Type mismatch - src overrides
+					dst[key] = srcVal
+				}
+			} else {
+				// Primitive or type mismatch - src overrides
+				dst[key] = srcVal
+			}
+		} else {
+			// Key only in src - just copy
+			dst[key] = srcVal
+		}
+	}
+	return dst
+}
+
+// mergeConfigs rebuilds `cfg` by overlaying userCfg on top of dftCfg using JSON deep merge.
 // It returns an error if any validation fails.
 func mergeConfigs() error {
 	configMutex.Lock()
 	defer configMutex.Unlock()
 
-	// 1. Shallow copy defaults into cfg
-	cfg = dftCfg
-
-	// 2. Deep-copy the default template map so we don't mutate dftCfg
-	newElems := make(map[string][]DisplayElement, len(dftCfg.DisplayTemplate.Elements))
-	for page, elems := range dftCfg.DisplayTemplate.Elements {
-		copySlice := make([]DisplayElement, len(elems))
-		copy(copySlice, elems)
-		newElems[page] = copySlice
+	// Convert both configs to JSON
+	dftJSON, err := json.Marshal(dftCfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal default config: %v", err)
 	}
 
-	// 3. Overlay any user-provided pages/elements
-	if userCfg.DisplayTemplate.Elements != nil {
-		for page, elems := range userCfg.DisplayTemplate.Elements {
-			copySlice := make([]DisplayElement, len(elems))
-			copy(copySlice, elems)
-			newElems[page] = copySlice
-		}
+	userJSON, err := json.Marshal(userCfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal user config: %v", err)
 	}
-	cfg.DisplayTemplate.Elements = newElems
 
-	// 4. Override scalar fields if userCfg set them
-	if userCfg.ScreenDimmerTimeOnBatterySeconds != 0 {
-		cfg.ScreenDimmerTimeOnBatterySeconds = userCfg.ScreenDimmerTimeOnBatterySeconds
+	// Parse to generic maps
+	var dftMap map[string]interface{}
+	var userMap map[string]interface{}
+
+	if err := json.Unmarshal(dftJSON, &dftMap); err != nil {
+		return fmt.Errorf("failed to unmarshal default config: %v", err)
 	}
-	if userCfg.ScreenDimmerTimeOnDCSeconds != 0 {
-		cfg.ScreenDimmerTimeOnDCSeconds = userCfg.ScreenDimmerTimeOnDCSeconds
+
+	if err := json.Unmarshal(userJSON, &userMap); err != nil {
+		return fmt.Errorf("failed to unmarshal user config: %v", err)
 	}
-	if userCfg.ScreenMaxBrightness != 0 {
-		cfg.ScreenMaxBrightness = userCfg.ScreenMaxBrightness
+
+	// Deep merge user config into default config
+	mergedMap := deepMergeJSON(dftMap, userMap)
+
+	// Convert back to Config struct
+	mergedJSON, err := json.Marshal(mergedMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal merged config: %v", err)
 	}
-	if userCfg.ScreenMinBrightness != 0 {
-		cfg.ScreenMinBrightness = userCfg.ScreenMinBrightness
+
+	if err := json.Unmarshal(mergedJSON, &cfg); err != nil {
+		return fmt.Errorf("failed to unmarshal merged config: %v", err)
 	}
-	if userCfg.PingSite0 != "" {
-		cfg.PingSite0 = userCfg.PingSite0
-	}
-	if userCfg.PingSite1 != "" {
-		cfg.PingSite1 = userCfg.PingSite1
-	}
-	// Override ShowSms only if explicitly set in user config
-	// We need to check if the user config file actually contains show_sms field
-	if hasShowSmsInUserConfig() {
-		cfg.ShowSms = userCfg.ShowSms
-	}
+
+	log.Println("JSON deep merge completed successfully")
 
 	// 5. Validation
 	if cfg.ScreenDimmerTimeOnBatterySeconds < 0 {
