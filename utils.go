@@ -648,7 +648,7 @@ func mergeConfigs() error {
 
 	// Default ping sites if missing or too short to be valid
 	if len(cfg.PingSite0) <= 2 {
-		cfg.PingSite0 = "taobao.com"
+		cfg.PingSite0 = "1.1.1.1"
 	}
 	if len(cfg.PingSite1) <= 2 {
 		cfg.PingSite1 = "photonicat.com"
